@@ -163,4 +163,4 @@ async def tokenhelp(ctx):
     await ctx.send(embed=embed)
 
 # Replace 'your_token_here' with your bot's token
-bot.run('your_token_here')
+bot.run('MTIyOTYwODYyMzIwMjg5NzkzMA.GXtGRE.QKiR1mJr0GQ1KyPa2JpUS3Yq-t2DSQnI0qAFDs')
