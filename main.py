@@ -1,7 +1,7 @@
-import nextcord
-from nextcord import SelectOption, Interaction, ButtonStyle, Embed, ui
-from nextcord.ext import commands, tasks
-from nextcord.ui import View, Button, Select # Import View and Button for interaction components
+import discord
+from discord import SelectOption, Interaction, ButtonStyle, Embed, ui
+from discord.ext import commands, tasks
+from discord.ui import View, Button, Select # Import View and Button for interaction components
 import math
 import matplotlib.pyplot as plt
 import io
@@ -12,17 +12,16 @@ import time
 import logging
 import aiohttp
 import fakestories
-import shopping_system  # Assuming this is correctly using nextcord in its implementation
+import shopping_system  # Assuming this is correctly using discord in its implementation
 from itertools import cycle
-from shopping_system import LotterySystem
 import json
-import randomfeatures
-from randomfeatures import feature_concepts
 import os
+from database import load
+from custom_classes import ListWithTTL, CustomDict
 
 
 # Configure intents
-intents = nextcord.Intents.default()
+intents = discord.Intents.default()
 intents.messages = True  # If you need to read message content
 intents.message_content = True  # Only necessary for commands that explicitly require the content of messages
 intents.guilds = True
@@ -33,11 +32,8 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 
 
 ############# Define global variables #############
-user_balances = {}
-user_tickets = {}
-stock_prices = {}
-price_histories = {}
-user_stocks = {}
+
+
 last_active_time = {}
 token_gains = {}
 active_bets = {}
@@ -47,12 +43,11 @@ last_message_time = time.time()  # Initialize last_message_time
 work_command_count = {}
 traders_with_gains = {}  # This will be a dictionary where the key is the user ID and the value is the gain/loss
 user_tokens = {}
-last_token_deduction_time = time.time()  # Initialize the last deduction time when the bot starts
 user_cooldowns = {}  # This should be your actual dictionary of user cooldowns for stealing
 
 
 ############# Random colors for User Names #############
-COLORS = [nextcord.Color.green(), nextcord.Color.blue(), nextcord.Color.orange(), nextcord.Color.gold()]
+COLORS = [discord.Color.green(), discord.Color.blue(), discord.Color.orange(), discord.Color.gold()]
 
 
 ############# Constants #############
@@ -88,14 +83,24 @@ announcement_chan = 1232195437205782528  # Announcement Channel
 ALERT_CHANNEL_ID = 1236947951759261736
 
 ############# Recession Constants and Features #############
-REC_time_threshold_seconds = 14400  # Time threshold for recession in seconds
-REC_time_for_decrease = 7200  # Time for token decrease in seconds
-REC_token_decrease_rate = 0.1  # Rate of token decrease during recession
-REC_message_count = 10  # Number of messages needed to end a recession
-REC_CHAN = news  # Recession channel ID for announcements
-bot_in_recession = False  # Define bot_in_recession as a global variable
 
 
+RECESSION_END_TIMEFRAME = 14400  # Timeframe in seconds in which the required messages must be sent to end a recession
+RECESSION_END_REQ_MESSAGES = 10  # Number of messages needed to end a recession
+RECESSION_TRIGGER_TIMEFRAME = 14400 # Timeframe in seconds in which the required messages must be sent to prevent triggering a recession
+RECESSION_TRIGGER_REQ_MESSAGES = 10 # Number of messages needed to trigger a recession
+RECESSION_PUNISHMENT_MULTIPLIER = 0.1  # Rate of token decrease during recession, where 1 means 100% of tokens are lost
+RECESSION_PUNISHMENT_FREQUENCY = 7200 # How often the punishment is applied
+RECESSION_COOLDOWN_TIMER = 7200  # Time in seconds before a recession can be triggered after starup
+RECESSION_CHAN = news
+
+bot_in_recession = False
+_RECESSION_immune_timer = RECESSION_COOLDOWN_TIMER + time.time()
+total_message_count = 0
+last_token_deduction_time = 0
+
+message_list: list[discord.Message] = ListWithTTL(default_ttl=RECESSION_TRIGGER_TIMEFRAME)
+recession_message_list: list[discord.Message] = []
 
 ############# Stealing Features #############
 steal_percentage = .2  # Percentage of tokens to steal
@@ -116,31 +121,6 @@ LOSE_MULTIPLIER_HIGHER_LOWER = 1
 WIN_MULTIPLIER_ODD_EVEN = 2
 LOSE_MULTIPLIER_ODD_EVEN = 1
 
-# Load user data function assuming JSON storage
-def load_user_data():
-    try:
-        with open('user_data.json', 'r') as file:
-            return json.load(file)
-    except FileNotFoundError:
-        return {"user_balances": {}, "user_tickets": {}}
-
-
-# Save user data function
-def save_user_data(data):
-    with open('user_data.json', 'w') as file:
-        json.dump(data, file)
-
-
-# Load data on bot start
-user_data = load_user_data()
-
-# Example of initializing user data if not present
-if "user_tickets" not in user_data:
-    user_data["user_tickets"] = {}
-
-# Example of initializing user data if not present
-if "lottery_pot" not in user_data:
-    user_data["lottery_pot"] = 0
 
 # Set up basic logging configuration
 logging.basicConfig(level=logging.INFO)
@@ -153,16 +133,24 @@ async def reset_daily_counters():
 
 @bot.event
 async def on_ready():
+    global user_balances, user_tickets, stock_prices, price_histories, user_stocks
+    await load()
+    user_balances = CustomDict(loop=bot.loop, db_table="user_balances", schema={"user_id": int, "balance": int})
+    user_tickets = CustomDict(loop=bot.loop, db_table="user_tickets", schema={"user_id": int, "ticket_count": int})
+    stock_prices = CustomDict(loop=bot.loop, db_table="stock_prices", schema={"user_id": int, "price": int})
+    price_histories = CustomDict(loop=bot.loop, db_table="price_histories", schema={"user_id": int, "history": list})
+    user_stocks = CustomDict(loop=bot.loop, db_table="user_stocks", schema={"user_id": int, "stocks": dict})
+
     print(f'Logged in as {bot.user.name}')
     daily_token_gainers.start()
     change_rainbows_role_color.start()  # Start the role color change loop
     print("Role color change loop started.")
-    bot.loop.create_task(recession_check())  # Start the recession check task
+    bot.loop.create_task(handle_recession())  # Start the recession check task
     economic_report_task.start()  # Start the economic report task
     reset_daily_counters.start()  # Start the reset counters task
     award_most_active_user.start()
     channel = bot.get_channel(STATUS_CHANNEL_ID)
-    embed = nextcord.Embed(title="Role Selection", description="Click a button to get the corresponding role.", color=nextcord.Color.blue())
+    embed = discord.Embed(title="Role Selection", description="Click a button to get the corresponding role.", color=discord.Color.blue())
     view = RoleSelectView()
     await channel.send(embed=embed, view=view)
     print("All scheduled tasks started.")
@@ -178,9 +166,9 @@ def append_help_note(message):
 
 @bot.slash_command(guild_ids=[GUILD_ID],
                    description="Get information about the economy commands")
-async def econhelp(interaction: nextcord.Interaction):
+async def econhelp(interaction: discord.Interaction):
     help_message = ("\n"
-                    "This bot manages a virtual economy within the Discord server. It allows users to earn tokens, buy and sell stocks of other users to try and make more tokens, and engage in economic simulations that include market fluctuations and recessions. You get 1 token per message and 1 token per reaction to a message as the most basic way to get tokens other than gambling, trading, etc\n"
+                    "This bot manages a virtual economy within the discord server. It allows users to earn tokens, buy and sell stocks of other users to try and make more tokens, and engage in economic simulations that include market fluctuations and recessions. You get 1 token per message and 1 token per reaction to a message as the most basic way to get tokens other than gambling, trading, etc\n"
                     "\n"
                     "**Complete Commands List:**\n"
                     "- `/work`: Earn tokens and help end recessions. Your activity boosts the server's economy.\n"
@@ -230,9 +218,9 @@ Thank you and I hope you enjoy our custom bot! -OverratedAardvark
 For further assistance or if you encounter any issues, please reach out to the server owners.
 """
 
-    # Create embeds for both help message parts using nextcord
-    embed1 = nextcord.Embed(title="🤖 Help & Information - ScizoEcon Bot 🤖", description=help_message, color=nextcord.Color.blue())
-    embed2 = nextcord.Embed(title="🤖 Help & Information - ScizoEcon Bot 🤖", description=help_message_part2, color=nextcord.Color.blue())
+    # Create embeds for both help message parts using discord
+    embed1 = discord.Embed(title="🤖 Help & Information - ScizoEcon Bot 🤖", description=help_message, color=discord.Color.blue())
+    embed2 = discord.Embed(title="🤖 Help & Information - ScizoEcon Bot 🤖", description=help_message_part2, color=discord.Color.blue())
 
     # Send both embeds in the response to the interaction
     await interaction.response.send_message(embeds=[embed1, embed2], ephemeral=True)
@@ -259,7 +247,7 @@ async def daily_token_gainers():
     top_token_gainers = sorted(token_gains.items(), key=lambda x: x[1], reverse=True)[:5]
 
     # Create an embed message
-    embed = nextcord.Embed(title="🏆 Top Users 🏆", color=nextcord.Color.gold())
+    embed = discord.Embed(title="🏆 Top Users 🏆", color=discord.Color.gold())
 
     # Add the richest users to the embed
     richest_users_text = "\n".join(
@@ -319,7 +307,7 @@ async def award_most_active_user():
     # Reset the message tracker for the next day
     minute_message_tracker.clear()
 
-async def on_raw_reaction_add(payload: nextcord.RawReactionActionEvent):
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     # Check if the reaction is from the bot itself
     if payload.user_id != bot.user.id:
         # Fetch the message
@@ -338,7 +326,7 @@ async def on_raw_reaction_add(payload: nextcord.RawReactionActionEvent):
             user_reacted_messages.setdefault(payload.user_id, set()).add(payload.message_id)
             logging.info(f"{payload.user_id} gains 1 token from reacting to a message.")
 
-async def on_raw_reaction_remove(payload: nextcord.RawReactionActionEvent):
+async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     # Check if the reaction is from the bot itself
     if payload.user_id != bot.user.id:
         # Fetch the message
@@ -369,106 +357,92 @@ async def on_command_error(ctx, error):
 ##################  RECESSION CHECK AND FUNCTION  ######################################################################
 ########################################################################################################################
 
-async def recession_check():
-    while True:
-        await handle_recession()
-        await asyncio.sleep(5)  # Check every 5 seconds
 
-@tasks.loop(seconds=5)  # Adjust the timing as necessary
-async def handle_recession():
-    global last_message_time, bot_in_recession, last_token_deduction_time
+@tasks.loop(seconds=5)
+async def handle_recession(): # Responsible for starting a recession and handling the punishment, on_message is responsible for ending it
+    global bot_in_recession, message_list, recession_message_list
 
-    current_time = time.time()
-    time_since_last_message = current_time - last_message_time
-    time_since_last_deduction = current_time - last_token_deduction_time
-
-    # Check if server should enter recession
-    if time_since_last_message >= REC_time_threshold_seconds and not bot_in_recession:
+    if _RECESSION_immune_timer < time.time():
+        return
+        
+    if (len(message_list) <= RECESSION_TRIGGER_REQ_MESSAGES) and (not apply_recession_punishment.is_running()):
         bot_in_recession = True
-        channel = bot.get_channel(REC_CHAN)
-        embed = nextcord.Embed(title="📉 Economy in Recession 📉", description="The server has entered a recession due to inactivity. 10 messages must be sent in order to exit the Recession. Starting in 2 hours every 2 hours 10% of tokens will be lost.", color=nextcord.Color.red())
+        apply_recession_punishment.start()
+        
+        message_list = ListWithTTL(default_ttl=RECESSION_TRIGGER_TIMEFRAME)
+        recession_message_list = []
+
+        channel = bot.get_channel(RECESSION_CHAN)
+        embed = discord.Embed(title="📉 Economy in Recession 📉", description=f"The server has entered a recession due to inactivity. {RECESSION_END_REQ_MESSAGES} messages must be sent within a 2 hour timeframe in order to exit the Recession. Starting in {RECESSION_END_TIMEFRAME / 3600} hours, every {RECESSION_PUNISHMENT_FREQUENCY / 3600} hours {RECESSION_PUNISHMENT_MULTIPLIER*10}% of tokens will be lost.", color=discord.Color.red())
         await channel.send(embed=embed)
-        print("Recession started due to inactivity.")
+        print("Recession started and the message list has been wiped.")
 
-    # Handle token deduction during recession
-    if bot_in_recession and time_since_last_deduction >= REC_time_for_decrease:
-        # Deduct tokens from all users
-        for user_id in user_balances.keys():
-            if user_balances[user_id] > 0:  # Ensure no negative balance
-                deduction = max(int(user_balances[user_id] * REC_token_decrease_rate), 1)
-                user_balances[user_id] -= deduction
-                print(f"Deducted {deduction} tokens from {user_id}")
-        last_token_deduction_time = current_time  # Reset last deduction time
+@bot.listen()
+async def on_message(message: discord.Message):
+    global bot_in_recession, message_list, total_message_count, recession_message_list
 
-    # End recession if conditions are met
-    if bot_in_recession and daily_message_count >= REC_message_count:
-        bot_in_recession = False
-        channel = bot.get_channel(REC_CHAN)
-        embed = nextcord.Embed(title="🚀 Recession Ended 🚀", description="Activity has resumed, ending the recession.", color=nextcord.Color.green())
-        await channel.send(embed=embed)
-        print("Recession ended due to activity.")
+    if message.author.bot or message.guild is None:
+        return
 
+    message_list.append(message)
 
-@bot.event
-async def on_message(message):
-    global REC_message_count, daily_message_count, last_message_time, bot_in_recession, total_message_count
-
-    if message.author == bot.user:
-        return  # Ignore messages sent by the bot
-
-    user_id = message.author.id
-    last_message_time = time.time()  # Update the time of the last message
-
-    # Ensure new users start with a default balance
-    user_balances[user_id] = user_balances.get(user_id, 100) + (0 if bot_in_recession else 1)  # Increment balance by 1 token per message if not in recession
-
-    # Increment the message count for ending recession
-    daily_message_count += 1
     total_message_count += 1
-    print(f"Message from {message.author}: Total count updated to {total_message_count}, daily count updated to {daily_message_count}")
+    
+    if bot_in_recession:
+        recession_message_list.append(message)
+        
+        if len(message_list) >= RECESSION_END_REQ_MESSAGES: #  Check if the recession has ended due to sufficient message activity
+            bot_in_recession = False
+            recession_message_list = []
 
-    # Check if the recession should end
-    if bot_in_recession and daily_message_count >= REC_message_count:
-        bot_in_recession = False
-        daily_message_count = 0  # Reset daily message count after ending recession
-        channel = bot.get_channel(REC_CHAN)
-        embed = nextcord.Embed(title="🚀💰 End of Recession 💰🚀",
-                               description="The server has exited the recession. Token gains are reinstated.",
-                               color=nextcord.Color.green())
-        await channel.send(embed=embed)
-        print("Recession ended due to sufficient message activity.")
+        if not bot_in_recession:
+            apply_recession_punishment.stop()
+            channel = bot.get_channel(RECESSION_CHAN)
+            embed = discord.Embed(title="🚀💰 End of Recession 💰🚀",
+                                description="The server has exited the recession. Token gains are reinstated.",
+                                color=discord.Color.green())
+            await channel.send(embed=embed)
+            print("Recession ended due to sufficient message activity.")
+                
 
-    await bot.process_commands(message)  # Make sure to process commands if any
+@tasks.loop(seconds=RECESSION_PUNISHMENT_FREQUENCY)
+async def apply_recession_punishment():
+    global user_balances, last_token_deduction_time
+    for user_id, balance in user_balances.items():
+        user_balances[user_id] = max(int(balance - int(balance * RECESSION_PUNISHMENT_MULTIPLIER)), 1)
+    
 
 
-@bot.slash_command(guild_ids=[GUILD_ID], description="Get information about the current economic state")
-async def recession(interaction: nextcord.Interaction):
-    global bot_in_recession, last_message_time, last_token_deduction_time, daily_message_count
+@bot.slash_command(guild_ids=[GUILD_ID], description="Get information about the current economic state")  # type: ignore
+async def recession(interaction: discord.Interaction):
+    global bot_in_recession, last_token_deduction_time
 
-    current_time = time.time()
-    time_since_last_message = current_time - last_message_time
-    time_since_last_deduction = current_time - last_token_deduction_time
 
     if bot_in_recession:
-        messages_needed = max(0, REC_message_count - daily_message_count)
-        time_till_next_deduction = max(0, REC_time_for_decrease - time_since_last_deduction)  # Time in seconds
+        messages_needed = RECESSION_END_REQ_MESSAGES - len(recession_message_list)
+        time_till_next_deduction = max(0, RECESSION_PUNISHMENT_FREQUENCY - time.time() - last_token_deduction_time)  # Time in seconds
         recession_info = (f"📉 We are currently in a recession.\n"
                           f"📬 {messages_needed} more messages need to be sent to end the recession.\n"
                           f"⏰ The next token deduction will happen in {time_till_next_deduction} seconds.")
     else:
-        time_till_recession = max(0, REC_time_threshold_seconds - time_since_last_message)  # Time in seconds
+        s = RECESSION_TRIGGER_TIMEFRAME
+        hours = s // 3600
+        s = s - (hours * 3600)
+        minutes = s // 60
+        seconds = s - (minutes * 60)
         recession_info = (f"📈 We are not currently in a recession.\n"
-                          f"⏳ A recession will start in {time_till_recession} seconds if no new messages are sent.")
+                          f"⏳ {len(recession_message_list)} have been sent in the last {int(hours)} hours {int(minutes)} minutes {int(seconds)} seconds, if this number goes below {RECESSION_TRIGGER_REQ_MESSAGES}, a recession will start.")
 
-    embed = nextcord.Embed(title="🏦 Economic State", description=recession_info, color=nextcord.Color.blue())
+    embed = discord.Embed(title="🏦 Economic State", description=recession_info, color=discord.Color.blue())
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 ########################################################################################################################
 ##################  STOCK FUNCTIONS  ###################################################################################
 ########################################################################################################################
 
 
-def update_stock_price(user_id):
+def update_stock_price(user_id: int):
     balance = user_balances.get(user_id, 100)
 
     # Define the price calculation logic based on balance thresholds
@@ -539,7 +513,7 @@ def plot_stock_history(prices, max_points=500):
 
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Display the stock price of a user with history graph")
-async def stock_price(interaction: nextcord.Interaction, user: nextcord.User):
+async def stock_price(interaction: discord.Interaction, user: discord.User):
     # Defer the interaction to give time for processing (especially since you might generate images)
     await interaction.response.defer(ephemeral=True)
 
@@ -560,22 +534,22 @@ async def stock_price(interaction: nextcord.Interaction, user: nextcord.User):
                 image_binary_7.write(graph_7.getbuffer())
                 image_binary_30.seek(0)
                 image_binary_7.seek(0)
-                files = [nextcord.File(image_binary_30, '30_day_stock_history.png'),
-                         nextcord.File(image_binary_7, '7_day_stock_history.png')]
-                embed = nextcord.Embed(title="Stock Price and History", description=price_message,
-                                       color=nextcord.Color.blue())
+                files = [discord.File(image_binary_30, '30_day_stock_history.png'),
+                         discord.File(image_binary_7, '7_day_stock_history.png')]
+                embed = discord.Embed(title="Stock Price and History", description=price_message,
+                                       color=discord.Color.blue())
                 embed.set_image(url="attachment://30_day_stock_history.png")
                 await interaction.followup.send(embed=embed, files=files)
         else:
-            embed = nextcord.Embed(title="Stock Price", description=price_message, color=nextcord.Color.blue())
+            embed = discord.Embed(title="Stock Price", description=price_message, color=discord.Color.blue())
             await interaction.followup.send(embed=embed)
     else:
-        embed = nextcord.Embed(title="Stock Price", description=price_message, color=nextcord.Color.blue())
+        embed = discord.Embed(title="Stock Price", description=price_message, color=discord.Color.blue())
         await interaction.followup.send(embed=embed)
 
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Buy stock of a user")
-async def stock_buy(interaction: nextcord.Interaction, user: nextcord.User, amount: int):
+async def stock_buy(interaction: discord.Interaction, user: discord.User, amount: int):
     global trade_count
     await interaction.response.defer(ephemeral=True)
 
@@ -612,6 +586,7 @@ async def stock_buy(interaction: nextcord.Interaction, user: nextcord.User, amou
     update_stock_price(seller_id)
 
     # Update the buyer's stock ownership
+    
     if buyer_id not in user_stocks:
         user_stocks[buyer_id] = {}
     if seller_id not in user_stocks[buyer_id]:
@@ -626,7 +601,7 @@ async def stock_buy(interaction: nextcord.Interaction, user: nextcord.User, amou
 
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Sell stock of a user")
-async def stock_sell(interaction: nextcord.Interaction, user: nextcord.User, amount: int):
+async def stock_sell(interaction: discord.Interaction, user: discord.User, amount: int):
     global trade_count, traders_with_gains, token_gains
     await interaction.response.defer(ephemeral=True)
 
@@ -672,12 +647,12 @@ async def stock_sell(interaction: nextcord.Interaction, user: nextcord.User, amo
     logging.info(f"User {interaction.user.id} sold stocks. Gain/Loss: {gain_loss} tokens.")
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="View all stocks owned")
-async def stock(interaction: nextcord.Interaction):
+async def stock(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     stocks_owned = user_stocks.get(interaction.user.id, {})
     if not stocks_owned:
-        embed = nextcord.Embed(title="Stocks Owned", description="You do not own any stocks.",
-                               color=nextcord.Color.blue())
+        embed = discord.Embed(title="Stocks Owned", description="You do not own any stocks.",
+                               color=discord.Color.blue())
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
 
@@ -699,7 +674,7 @@ async def stock(interaction: nextcord.Interaction):
             f"You own {amount} shares of <@{user_id}> purchased at {purchase_price:.2f} tokens each (Current Value: {total_current_value:.2f} tokens, Gain/Loss: {gain_loss_str})")
 
     response = '\n'.join(lines)
-    embed = nextcord.Embed(title="Stocks Owned", description=response, color=nextcord.Color.blue())
+    embed = discord.Embed(title="Stocks Owned", description=response, color=discord.Color.blue())
     total_gain_loss_str = f"Total Gain/Loss: {total_gain_loss:.2f} tokens"
     embed.set_footer(text=total_gain_loss_str)
     await interaction.followup.send(embed=embed, ephemeral=True)
@@ -709,14 +684,14 @@ async def stock(interaction: nextcord.Interaction):
 ########################################################################################################################
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="See the top 5 token holders")
-async def leader(interaction: nextcord.Interaction):
+async def leader(interaction: discord.Interaction):
     top_users = sorted(user_balances.items(), key=lambda x: x[1], reverse=True)[:5]
 
     # Create an embed to send as a response
-    embed = nextcord.Embed(
+    embed = discord.Embed(
         title="🏆 Server's Wealthiest Tycoons 🏆",
         description="Here are the top 5 token holders in the server:",
-        color=nextcord.Color.gold()
+        color=discord.Color.gold()
     )
 
     for user_id, balance in top_users:
@@ -727,13 +702,13 @@ async def leader(interaction: nextcord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Check your token balance")
-async def balance(interaction: nextcord.Interaction):
+async def balance(interaction: discord.Interaction):
     user_id = interaction.user.id
     current_balance = user_balances.get(user_id, 100)  # Default to 100 if no balance exists
-    embed = nextcord.Embed(
+    embed = discord.Embed(
         title="Token Balance",  # Title of the embed
         description=f"💰 Your treasure chest contains **{current_balance} tokens**. 💰",  # Main text
-        color=nextcord.Color.gold()  # Color of the embed sidebar
+        color=discord.Color.gold()  # Color of the embed sidebar
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -742,7 +717,7 @@ async def balance(interaction: nextcord.Interaction):
 ########################################################################################################################
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Change your nickname")
-async def name_change(interaction: nextcord.Interaction, name: str):
+async def name_change(interaction: discord.Interaction, name: str):
     # ID of the group that has permission to use this command and from which users will be removed after using the command
     group_id = 1232169888911724544
     member = interaction.guild.get_member(interaction.user.id)
@@ -763,7 +738,7 @@ async def name_change(interaction: nextcord.Interaction, name: str):
                                                 ephemeral=True)
             else:
                 await interaction.followup.send("Failed to find the role to remove.", ephemeral=True)
-        except nextcord.errors.Forbidden:
+        except discord.errors.Forbidden:
             await interaction.response.send_message("I don't have permission to change nicknames or remove roles.",
                                                     ephemeral=False)
     else:
@@ -798,8 +773,8 @@ async def economic_report_task():
     trade_report = f"A total of {trade_count} stock trades have been made since the last report."
 
     # Generate the economic report embed
-    embed = nextcord.Embed(title="📰 PSYCHOSIS SUPPORT NEWS 10! 🎉",
-                           description="In this saga of our flourishing economy:", color=nextcord.Color.gold())
+    embed = discord.Embed(title="📰 PSYCHOSIS SUPPORT NEWS 10! 🎉",
+                           description="In this saga of our flourishing economy:", color=discord.Color.gold())
     embed.add_field(name="This just in!", value=messages_report, inline=False)
     embed.add_field(name="Most Active User", value=most_messages_report, inline=False)
     embed.add_field(name="Stock Market Update", value=trade_report, inline=False)
@@ -843,7 +818,7 @@ async def economic_report_task():
                 embed.set_image(url="attachment://cat_vibing.gif")
 
                 # Send the embed with the GIF as an attachment
-                await channel.send(embed=embed, file=nextcord.File(io.BytesIO(gif_bytes), "cat_vibing.gif"))
+                await channel.send(embed=embed, file=discord.File(io.BytesIO(gif_bytes), "cat_vibing.gif"))
 
     # Reset the message tracker and counters after the report uses the data
     minute_message_tracker.clear()
@@ -858,19 +833,17 @@ async def economic_report_task():
 
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Embark on a grand quest to acquire treasures!")
-async def store(interaction: nextcord.Interaction):
+async def store(interaction: discord.Interaction):
     # Pass interaction.client to show_shop_items
     await shopping_system.show_shop_items(interaction, lottery_pot, user_balances, user_tickets, interaction.client)
-    # Assuming save_user_data function is defined elsewhere and user_data is available
-    save_user_data(user_data)  # Save user data after the store command
 
 
 @bot.event
-async def on_component(interaction: nextcord.Interaction):
+async def on_component(interaction: discord.Interaction):
     # Check for the type of component interacted with, here it's likely a button or select menu
-    if interaction.type == nextcord.InteractionType.component:
+    if interaction.type == discord.InteractionType.component:
         if interaction.custom_id == 'name_color_choice':
-            # Assuming 'change_name_color' function exists and is properly set to handle Nextcord interactions
+            # Assuming 'change_name_color' function exists and is properly set to handle discord interactions
             await change_name_color(interaction, interaction.user, interaction.data['values'][0])
 
 
@@ -883,9 +856,9 @@ class ApprovalView(View):
         self.user = user  # Pass the user who initiated the command
         self.approval_message = None  # Placeholder for the verification message
 
-    @nextcord.ui.button(label="Yes", style=nextcord.ButtonStyle.green)
-    async def confirm(self, button: Button, interaction: nextcord.Interaction):
-        announcement_embed = nextcord.Embed(
+    @discord.ui.button(label="Yes", style=discord.ButtonStyle.green)
+    async def confirm(self, button: Button, interaction: discord.Interaction):
+        announcement_embed = discord.Embed(
             title="📣 Announcement 📣",
             description=self.content,
             color=0x00ff00  # Green color for the embed
@@ -901,7 +874,7 @@ class ApprovalView(View):
                 content="Announcement posted successfully!")  # Edit the original message to show success
 
             # Remove the Server Announcement role after the announcement is approved
-            role = nextcord.utils.get(interaction.guild.roles, id=1232196345851412512)
+            role = discord.utils.get(interaction.guild.roles, id=1232196345851412512)
             if role:
                 try:
                     await self.user.remove_roles(role)
@@ -919,14 +892,14 @@ class ApprovalView(View):
             await interaction.response.edit_message(
                 content="Failed to find the announcement channel.")  # Edit the original message to show failure
 
-    @nextcord.ui.button(label="No", style=nextcord.ButtonStyle.red)
-    async def cancel(self, button: Button, interaction: nextcord.Interaction):
+    @discord.ui.button(label="No", style=discord.ButtonStyle.red)
+    async def cancel(self, button: Button, interaction: discord.Interaction):
         await interaction.message.delete()  # Delete the original message
         # Send a cancellation message to the user
         if self.user:
             try:
                 await self.user.send("Your announcement was canceled by a staff member.")
-            except nextcord.HTTPException:
+            except discord.HTTPException:
                 print("Could not send a private message to the user.")
 
         # Delete the verification message
@@ -935,16 +908,16 @@ class ApprovalView(View):
 
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Create an announcement (Admin Only)")
-async def announcement(interaction: nextcord.Interaction, message: str):
+async def announcement(interaction: discord.Interaction, message: str):
     # Check if user has the Server Announcement role
-    role = nextcord.utils.get(interaction.guild.roles, id=1232196345851412512)
+    role = discord.utils.get(interaction.guild.roles, id=1232196345851412512)
     if role in interaction.user.roles:
         approval_channel_id = approv_announcement_chan  # Correct approval channel ID
         announcement_channel_id = announcement_chan
         view = ApprovalView(message, approval_channel_id, announcement_channel_id, interaction.user)
         approval_channel = bot.get_channel(approval_channel_id)
         if approval_channel:
-            approval_embed = nextcord.Embed(
+            approval_embed = discord.Embed(
                 title="📣 New Announcement Approval 📣",
                 description=f"Approve this message for announcement? \"{message}\"",
                 color=0xffa500  # Orange color for the embed
@@ -968,15 +941,15 @@ color_cycle = cycle(COLORS)  # Create a cycle object from the colors list
 async def change_rainbows_role_color():
     guild = bot.get_guild(GUILD_ID)
     if guild:
-        role = nextcord.utils.get(guild.roles, id=RAINBOWS_ROLE_ID)
+        role = discord.utils.get(guild.roles, id=RAINBOWS_ROLE_ID)
         if role:
             new_color = next(color_cycle)  # Get the next color from the cycle
             try:
                 await role.edit(color=new_color)  # Change the role's color
                 print(f"Changed Rainbow Role color to {new_color}")
-            except nextcord.Forbidden:
+            except discord.Forbidden:
                 print("I don't have permission to edit this role.")
-            except nextcord.HTTPException as e:
+            except discord.HTTPException as e:
                 print(f"Failed to change role color due to HTTP error: {e}")
         else:
             print("Role not found.")
@@ -989,7 +962,7 @@ async def change_rainbows_role_color():
 
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Give a user a specified amount of tokens")
-async def give_tokens(interaction: nextcord.Interaction, user: nextcord.User, tokens: int):
+async def give_tokens(interaction: discord.Interaction, user: discord.User, tokens: int):
     # Add the specified amount of tokens to the user's balance
     user_balances[user.id] = user_balances.get(user.id, 0) + tokens
 
@@ -1001,15 +974,15 @@ async def give_tokens(interaction: nextcord.Interaction, user: nextcord.User, to
 ########################################################################################################################
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Try and steal tokens from a user. If you fail you lose 10% and go to jail for 1 min")
-async def steal(interaction: nextcord.Interaction, target: nextcord.User):
+async def steal(interaction: discord.Interaction, target: discord.User):
     stealer_id = interaction.user.id
     target_id = target.id
     original_channel = interaction.channel  # Define original_channel right here
 
     # Define the embed for attempting to steal
-    attempt_embed = nextcord.Embed(title="🔒 Attempting to Steal",
+    attempt_embed = discord.Embed(title="🔒 Attempting to Steal",
                                    description=f"Attempting to steal tokens from {target.display_name}...",
-                                   color=nextcord.Color.blurple())
+                                   color=discord.Color.blurple())
 
     # Send the embed indicating the attempt to steal
     await interaction.response.send_message(embed=attempt_embed, ephemeral=True)
@@ -1019,22 +992,22 @@ async def steal(interaction: nextcord.Interaction, target: nextcord.User):
 
     # Check if the user is on cooldown
     if stealer_id in user_cooldowns and user_cooldowns[stealer_id] > time.time():
-        embed = nextcord.Embed(title="⏳ Cooldown Active",
+        embed = discord.Embed(title="⏳ Cooldown Active",
                                description=f"{interaction.user.mention}, you can only use this command once every 24 hours. 🕒",
-                               color=nextcord.Color.orange())
+                               color=discord.Color.orange())
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
 
     # Check if the target has enough tokens to steal
     if user_balances.get(target_id, 0) < 1:
-        embed = nextcord.Embed(title="😔 Not Enough Tokens",
+        embed = discord.Embed(title="😔 Not Enough Tokens",
                                description=f"{interaction.user.mention}, {target.display_name} does not have enough tokens to steal. 🚫",
-                               color=nextcord.Color.red())
+                               color=discord.Color.red())
         await interaction.followup.send(embed=embed, ephemeral=True)
         return
 
     # Define embed_jail here
-    embed_jail = nextcord.Embed(
+    embed_jail = discord.Embed(
         title="🏛️ Courtroom Verdict Announcement",
         description=(
             f"**Hearing of the Digital Tribunal of {interaction.guild.name}**\n\n"
@@ -1045,7 +1018,7 @@ async def steal(interaction: nextcord.Interaction, target: nextcord.User):
             f"**Sentence:** Temporary confinement within the virtual detention facility for a duration of 1 minute. This sentence is to be served immediately. The accused is ordered to reflect on their actions during this period.\n\n"
             f"Let this serve as a deterrent to all members within this community. Justice has been upheld."
         ),
-        color=nextcord.Color.red()
+        color=discord.Color.red()
     )
 
     # Generate a random number for the 30% chance
@@ -1053,9 +1026,9 @@ async def steal(interaction: nextcord.Interaction, target: nextcord.User):
         stolen_tokens = round(user_balances[target_id] * steal_percentage)
         user_balances[target_id] -= stolen_tokens
         user_balances[stealer_id] += stolen_tokens
-        embed_success = nextcord.Embed(title="🎉 Steal Successful",
+        embed_success = discord.Embed(title="🎉 Steal Successful",
                                        description=f"{interaction.user.mention}, you successfully stole {stolen_tokens} tokens from {target.display_name}!",
-                                       color=nextcord.Color.green())
+                                       color=discord.Color.green())
         await interaction.followup.send(embed=embed_success, ephemeral=True)
         await target.send(f"{interaction.user.display_name} has stolen {stolen_tokens} tokens from you. 🎊")
     else:
@@ -1078,10 +1051,10 @@ async def steal(interaction: nextcord.Interaction, target: nextcord.User):
             embed_jail.set_image(url=f"attachment://steal.gif")
 
             # Send the embed with the GIF in the jail channel
-            message = await jail_channel.send(embed=embed_jail, file=nextcord.File(gif_path))
+            message = await jail_channel.send(embed=embed_jail, file=discord.File(gif_path))
 
             # Send the same embed with the GIF in the original channel
-            await original_channel.send(embed=embed_jail, file=nextcord.File(gif_path))
+            await original_channel.send(embed=embed_jail, file=discord.File(gif_path))
 
             # Send the message only to the user who was attempted to be robbed
             await target.send("Someone attempted to steal tokens from you but failed. 😲")
@@ -1089,9 +1062,9 @@ async def steal(interaction: nextcord.Interaction, target: nextcord.User):
                 remove_role_after_delay(interaction.user, role, jail_time, interaction.guild, jail_channel,
                                         original_channel, message))
         else:
-            embed_error = nextcord.Embed(title="⚠️ Error",
+            embed_error = discord.Embed(title="⚠️ Error",
                                          description="Failed to assign the role or find the jail channel. ❗",
-                                         color=nextcord.Color.red())
+                                         color=discord.Color.red())
             await interaction.followup.send(embed=embed_error, ephemeral=True)
 
 async def remove_role_after_delay(user, role, delay, guild, jail_channel, original_channel,
@@ -1101,9 +1074,9 @@ async def remove_role_after_delay(user, role, delay, guild, jail_channel, origin
     # Reset channel permissions
     await jail_channel.set_permissions(user, overwrite=None)
     await jail_channel.set_permissions(guild.default_role, overwrite=None)
-    embed_release = nextcord.Embed(title="🔓 Jail Time Over",
+    embed_release = discord.Embed(title="🔓 Jail Time Over",
                                    description=f"{user.mention} has been released from jail. Freedom! 🎉",
-                                   color=nextcord.Color.green())
+                                   color=discord.Color.green())
     await original_channel.send(embed=embed_release)  # Send the release message to the original channel
 
     # Delete all messages in the jail channel
@@ -1112,7 +1085,7 @@ async def remove_role_after_delay(user, role, delay, guild, jail_channel, origin
 
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Claim a pot of 10 tokens once a day")
-async def claim(interaction: nextcord.Interaction):
+async def claim(interaction: discord.Interaction):
     global last_claim_time, claim_pot, token_gains
 
     user_id = interaction.user.id
@@ -1128,10 +1101,10 @@ async def claim(interaction: nextcord.Interaction):
         claim_pot = 0
 
         # Create an embed to send as a response
-        embed = nextcord.Embed(
+        embed = discord.Embed(
             title="🎉 You've claimed the pot! 🎉",
             description=f"You now have {user_balances[user_id]} tokens. 💰",
-            color=nextcord.Color.green()
+            color=discord.Color.green()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
         logging.info(f"{interaction.user.display_name} claimed the daily pot of {claim_pot} tokens.")
@@ -1140,21 +1113,21 @@ async def claim(interaction: nextcord.Interaction):
         hours_remaining = 24 - (time.time() - last_claim_time) / 60 / 60
 
         # Create an embed to send as a response
-        embed = nextcord.Embed(
+        embed = discord.Embed(
             title="🚫 The pot has already been claimed. 🚫",
             description=f"It will be available again in {hours_remaining:.2f} hours. ⏰",
-            color=nextcord.Color.red()
+            color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-class GamblingView(nextcord.ui.View):
+class GamblingView(discord.ui.View):
     def __init__(self, user_id, bet_amount):
         super().__init__()
         self.user_id = user_id
         self.bet_amount = bet_amount
 
-    def create_result_embed(self, title, description, color=nextcord.Color.green()):
-        embed = nextcord.Embed(title=title, description=description, color=color)
+    def create_result_embed(self, title, description, color=discord.Color.green()):
+        embed = discord.Embed(title=title, description=description, color=color)
         embed.set_footer(text=f"Bet Amount: {self.bet_amount} tokens")
         return embed
 
@@ -1166,8 +1139,8 @@ class GamblingView(nextcord.ui.View):
             return False
         return True
 
-    @nextcord.ui.button(label="Coin Flip 🪙", style=nextcord.ButtonStyle.green)
-    async def coin_flip(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
+    @discord.ui.button(label="Coin Flip 🪙", style=discord.ButtonStyle.green)
+    async def coin_flip(self, button: discord.ui.Button, interaction: discord.Interaction):
         global user_balances, token_gains
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("You are not the one gambling!", ephemeral=True)
@@ -1176,9 +1149,9 @@ class GamblingView(nextcord.ui.View):
         if not await self.check_balance():
             return
 
-        view = nextcord.ui.View()
-        view.add_item(nextcord.ui.Button(label="Heads", style=nextcord.ButtonStyle.green, custom_id="heads"))
-        view.add_item(nextcord.ui.Button(label="Tails", style=nextcord.ButtonStyle.green, custom_id="tails"))
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(label="Heads", style=discord.ButtonStyle.green, custom_id="heads"))
+        view.add_item(discord.ui.Button(label="Tails", style=discord.ButtonStyle.green, custom_id="tails"))
         await interaction.response.send_message("🔮 Choose Heads or Tails:", view=view, ephemeral=True)
 
         def check(m):
@@ -1197,18 +1170,18 @@ class GamblingView(nextcord.ui.View):
             total_balance = user_balances[self.user_id]
             embed = self.create_result_embed("🎉 Coin Flip Victory!",
                                              f"You won {self.bet_amount * WIN_MULTIPLIER_COIN_FLIP} tokens! The result was {result}. Your total balance is now {total_balance} tokens.",
-                                             nextcord.Color.green())
+                                             discord.Color.green())
         else:
             user_balances[self.user_id] = max(user_balances.get(self.user_id, 0), 0) - self.bet_amount * LOSE_MULTIPLIER_COIN_FLIP
             token_gains[self.user_id] = token_gains.get(self.user_id, 0) - self.bet_amount * LOSE_MULTIPLIER_COIN_FLIP
             total_balance = user_balances[self.user_id]
             embed = self.create_result_embed("👎 Coin Flip Loss",
                                              f"You lost {self.bet_amount * LOSE_MULTIPLIER_COIN_FLIP} tokens. The result was {result}. Your total balance is now {total_balance} tokens.",
-                                             nextcord.Color.red())
+                                             discord.Color.red())
         await choice_interaction.followup.send(embed=embed, ephemeral=True)
 
-    @nextcord.ui.button(label="Roulette 🎰", style=nextcord.ButtonStyle.green)
-    async def roulette(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
+    @discord.ui.button(label="Roulette 🎰", style=discord.ButtonStyle.green)
+    async def roulette(self, button: discord.ui.Button, interaction: discord.Interaction):
         global user_balances, token_gains
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("You are not the one gambling!", ephemeral=True)
@@ -1217,16 +1190,16 @@ class GamblingView(nextcord.ui.View):
         if not await self.check_balance():
             return
 
-        select = nextcord.ui.Select(placeholder="Choose a number range...",
+        select = discord.ui.Select(placeholder="Choose a number range...",
                                     options=[
-                                        nextcord.SelectOption(label="1-3", value="1-3"),
-                                        nextcord.SelectOption(label="4-6", value="4-6"),
-                                        nextcord.SelectOption(label="7-9", value="7-9"),
-                                        nextcord.SelectOption(label="10-12", value="10-12"),
-                                        nextcord.SelectOption(label="13-15", value="13-15")
+                                        discord.SelectOption(label="1-3", value="1-3"),
+                                        discord.SelectOption(label="4-6", value="4-6"),
+                                        discord.SelectOption(label="7-9", value="7-9"),
+                                        discord.SelectOption(label="10-12", value="10-12"),
+                                        discord.SelectOption(label="13-15", value="13-15")
                                     ])
 
-        view = nextcord.ui.View()
+        view = discord.ui.View()
         view.add_item(select)
         await interaction.response.send_message("🔄 Spin the Roulette Wheel!", view=view, ephemeral=True)
 
@@ -1248,18 +1221,18 @@ class GamblingView(nextcord.ui.View):
             total_balance = user_balances[self.user_id]
             embed = self.create_result_embed("🎉 Roulette Jackpot!",
                                              f"You won {self.bet_amount * WIN_MULTIPLIER_ROULETTE} tokens! The wheel landed on {result}, within the range {chosen_range}. Your total balance is now {total_balance} tokens.",
-                                             nextcord.Color.green())
+                                             discord.Color.green())
         else:
             user_balances[self.user_id] = max(user_balances.get(self.user_id, 0), 0) - self.bet_amount * LOSE_MULTIPLIER_ROULETTE
             token_gains[self.user_id] = token_gains.get(self.user_id, 0) - self.bet_amount * LOSE_MULTIPLIER_ROULETTE
             total_balance = user_balances[self.user_id]
             embed = self.create_result_embed("👎 Roulette Misfortune",
                                              f"You lost {self.bet_amount * LOSE_MULTIPLIER_ROULETTE} tokens. The wheel landed on {result}, not within the range {chosen_range}. Your total balance is now {total_balance} tokens.",
-                                             nextcord.Color.red())
+                                             discord.Color.red())
         await choice_interaction.followup.send(embed=embed, ephemeral=True)
 
-    @nextcord.ui.button(label="Higher or Lower ↕️", style=nextcord.ButtonStyle.green)
-    async def higher_or_lower(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
+    @discord.ui.button(label="Higher or Lower ↕️", style=discord.ButtonStyle.green)
+    async def higher_or_lower(self, button: discord.ui.Button, interaction: discord.Interaction):
         global user_balances, token_gains
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("You are not the one gambling!", ephemeral=True)
@@ -1269,9 +1242,9 @@ class GamblingView(nextcord.ui.View):
             return
 
         initial_number = random.randint(2, 9)
-        view = nextcord.ui.View()
-        view.add_item(nextcord.ui.Button(label="Higher", style=nextcord.ButtonStyle.green, custom_id="higher"))
-        view.add_item(nextcord.ui.Button(label="Lower", style=nextcord.ButtonStyle.green, custom_id="lower"))
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(label="Higher", style=discord.ButtonStyle.green, custom_id="higher"))
+        view.add_item(discord.ui.Button(label="Lower", style=discord.ButtonStyle.green, custom_id="lower"))
 
         await interaction.response.send_message(
             f"🔢 The mystic number is {initial_number}. Will fate be Higher or Lower?", view=view, ephemeral=True)
@@ -1297,18 +1270,18 @@ class GamblingView(nextcord.ui.View):
             total_balance = user_balances[self.user_id]
             embed = self.create_result_embed("🎉 Higher or Lower Triumph!",
                                              f"You won {self.bet_amount * WIN_MULTIPLIER_HIGHER_LOWER} tokens! The number was {next_number}, which is {choice_interaction.data['custom_id']} than {initial_number}. Your total balance is now {total_balance} tokens.",
-                                             nextcord.Color.green())
+                                             discord.Color.green())
         else:
             user_balances[self.user_id] = max(user_balances.get(self.user_id, 0), 0) - self.bet_amount * LOSE_MULTIPLIER_HIGHER_LOWER
             token_gains[self.user_id] = token_gains.get(self.user_id, 0) - self.bet_amount * LOSE_MULTIPLIER_HIGHER_LOWER
             total_balance = user_balances[self.user_id]
             embed = self.create_result_embed("👎 Higher or Lower Defeat",
                                              f"You lost {self.bet_amount * LOSE_MULTIPLIER_HIGHER_LOWER} tokens. The number was {next_number}, which is not {choice_interaction.data['custom_id']} than {initial_number}. Your total balance is now {total_balance} tokens.",
-                                             nextcord.Color.red())
+                                             discord.Color.red())
         await choice_interaction.followup.send(embed=embed, ephemeral=True)
 
-    @nextcord.ui.button(label="Odd or Even 🔢", style=nextcord.ButtonStyle.green)
-    async def odd_or_even(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
+    @discord.ui.button(label="Odd or Even 🔢", style=discord.ButtonStyle.green)
+    async def odd_or_even(self, button: discord.ui.Button, interaction: discord.Interaction):
         global user_balances, token_gains
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("You are not the one gambling!", ephemeral=True)
@@ -1317,9 +1290,9 @@ class GamblingView(nextcord.ui.View):
         if not await self.check_balance():
             return
 
-        view = nextcord.ui.View()
-        view.add_item(nextcord.ui.Button(label="Odd", style=nextcord.ButtonStyle.green, custom_id="odd"))
-        view.add_item(nextcord.ui.Button(label="Even", style=nextcord.ButtonStyle.green, custom_id="even"))
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(label="Odd", style=discord.ButtonStyle.green, custom_id="odd"))
+        view.add_item(discord.ui.Button(label="Even", style=discord.ButtonStyle.green, custom_id="even"))
 
         await interaction.response.send_message("🔄 Cast your guess: Odd or Even?", view=view, ephemeral=True)
 
@@ -1343,18 +1316,18 @@ class GamblingView(nextcord.ui.View):
             total_balance = user_balances[self.user_id]
             embed = self.create_result_embed("🎉 Odd or Even Victory!",
                                              f"You won {self.bet_amount * WIN_MULTIPLIER_ODD_EVEN} tokens! The cosmic number was {next_number} and it is {'Odd' if is_odd else 'Even'}. Your total balance is now {total_balance} tokens.",
-                                             nextcord.Color.green())
+                                             discord.Color.green())
         else:
             user_balances[self.user_id] = max(user_balances.get(self.user_id, 0), 0) - self.bet_amount * LOSE_MULTIPLIER_ODD_EVEN
             token_gains[self.user_id] = token_gains.get(self.user_id, 0) - self.bet_amount * LOSE_MULTIPLIER_ODD_EVEN
             total_balance = user_balances[self.user_id]
             embed = self.create_result_embed("👎 Odd or Even Loss",
                                              f"You lost {self.bet_amount * LOSE_MULTIPLIER_ODD_EVEN} tokens. The cosmic number was {next_number} and it is {'Odd' if is_odd else 'Even'}. Your total balance is now {total_balance} tokens.",
-                                             nextcord.Color.red())
+                                             discord.Color.red())
         await choice_interaction.followup.send(embed=embed, ephemeral=True)
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Start gambling by betting tokens")
-async def gambling(interaction: nextcord.Interaction, tokens: int):
+async def gambling(interaction: discord.Interaction, tokens: int):
     user_id = interaction.user.id
     if tokens > user_balances.get(user_id, 0):
         await interaction.response.send_message("You do not have enough tokens to gamble this amount.", ephemeral=True)
@@ -1367,11 +1340,11 @@ async def gambling(interaction: nextcord.Interaction, tokens: int):
                         f"↕️ Higher or Lower - Odds vary. Payout: {WIN_MULTIPLIER_HIGHER_LOWER}x. Loss Multiplier: {LOSE_MULTIPLIER_HIGHER_LOWER}x.\n" \
                         f"🎯 Odd or Even - 50/50 chance. Payout: {WIN_MULTIPLIER_ODD_EVEN}x. Loss Multiplier: {LOSE_MULTIPLIER_ODD_EVEN}x."
 
-    await interaction.response.send_message(embed=nextcord.Embed(title="Let the Games Begin!", description=games_description, color=nextcord.Color.blurple()), view=view, ephemeral=True)
+    await interaction.response.send_message(embed=discord.Embed(title="Let the Games Begin!", description=games_description, color=discord.Color.blurple()), view=view, ephemeral=True)
 
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="Tip a user with tokens")
-async def tip(interaction: nextcord.Interaction, user: nextcord.User, tokens: int, message: str = ''):
+async def tip(interaction: discord.Interaction, user: discord.User, tokens: int, message: str = ''):
     # Check if the user has enough tokens
     if user_balances.get(interaction.user.id, 0) < tokens:
         await interaction.response.send_message("🚫 You don't have enough tokens to tip!", ephemeral=True)
@@ -1385,10 +1358,10 @@ async def tip(interaction: nextcord.Interaction, user: nextcord.User, tokens: in
     token_gains[user.id] = token_gains.get(user.id, 0) + tokens
 
     # Create an embed message to announce the tip
-    embed = nextcord.Embed(
+    embed = discord.Embed(
         title=f"💸 {interaction.user.display_name} tipped {user.display_name} 💸",
         description=f"🎉 {interaction.user.display_name} has tipped {tokens} tokens to {user.display_name}! 🎉",
-        color=nextcord.Color.green()
+        color=discord.Color.green()
     )
 
     # Add the optional message to the embed if provided
@@ -1397,3 +1370,5 @@ async def tip(interaction: nextcord.Interaction, user: nextcord.User, tokens: in
 
     # Send the embed message to the channel
     await interaction.response.send_message(embed=embed)
+
+bot.run("")
