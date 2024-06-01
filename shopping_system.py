@@ -1,4 +1,4 @@
-import discord
+import nextcord
 import random
 import logging
 import re
@@ -44,7 +44,7 @@ ticket_pot_threshold = 15  # Threshold for the lottery pot
 lottery_announcement_channel_id = 1229582044187852916
 
 
-class ItemSelectView(discord.ui.View):
+class ItemSelectView(nextcord.ui.View):
     def __init__(self, interaction, author, guild, lottery_pot, user_balances, user_tickets, client):
         super().__init__()
         self.interaction = interaction
@@ -55,26 +55,26 @@ class ItemSelectView(discord.ui.View):
         self.user_tickets = user_tickets
         self.client = client
 
-    @discord.ui.select(
+    @nextcord.ui.select(
         placeholder="Select an item to purchase...",
         min_values=1,
         max_values=1,
         options=[
-            discord.SelectOption(label=f"EPIC member Role - {epic_member_role_cost} tokens", value="1",
+            nextcord.SelectOption(label=f"EPIC member Role - {epic_member_role_cost} tokens", value="1",
                                   description="Join and become a prestigious EPIC member!"),
-            discord.SelectOption(label=f"Color Change Role - {color_cost} tokens", value="2",
+            nextcord.SelectOption(label=f"Color Change Role - {color_cost} tokens", value="2",
                                   description="Change your username color."),
-            discord.SelectOption(label=f"Name Change - {name_change} tokens", value="3",
+            nextcord.SelectOption(label=f"Name Change - {name_change} tokens", value="3",
                                   description="Buy this item to change your nickname once."),
-            discord.SelectOption(label=f"Fuckin' Rainbows - {rainbows_cost} tokens", value='4',
+            nextcord.SelectOption(label=f"Fuckin' Rainbows - {rainbows_cost} tokens", value='4',
                                   description='Watch your name color change every few minutes!'),
-            discord.SelectOption(label=f"Server Announcement - {server_announcement_cost} tokens", value='5',
+            nextcord.SelectOption(label=f"Server Announcement - {server_announcement_cost} tokens", value='5',
                                   description='Make a server-wide announcement.'),
-            discord.SelectOption(label="Lottery Tickets - 10 tokens each", value='6',
+            nextcord.SelectOption(label="Lottery Tickets - 10 tokens each", value='6',
                                   description='Try your luck with lottery tickets!'),
-            discord.SelectOption(label=f"Month of Nitro - {month_of_nitro_cost} tokens", value='7',
+            nextcord.SelectOption(label=f"Month of Nitro - {month_of_nitro_cost} tokens", value='7',
                                   description='Buy a month of Niro. Gift from OverratedAardvark ;)!'),
-            discord.SelectOption(label=f"Name Emoji Modifier - {emoji_cost} tokens", value="8",
+            nextcord.SelectOption(label=f"Name Emoji Modifier - {emoji_cost} tokens", value="8",
                                   description="Add an emoji to the end of your name!")
 
         ]
@@ -86,7 +86,7 @@ class ItemSelectView(discord.ui.View):
         self.stop()
 
 
-class ColorSelectView(discord.ui.View):
+class ColorSelectView(nextcord.ui.View):
     def __init__(self, interaction, author, guild, user_balances):
         super().__init__()
         self.interaction = interaction
@@ -94,11 +94,11 @@ class ColorSelectView(discord.ui.View):
         self.guild = guild
         self.user_balances = user_balances  # Pass user balances into the view
 
-    @discord.ui.select(
+    @nextcord.ui.select(
         placeholder="Choose your color...",
         min_values=1,
         max_values=1,
-        options=[discord.SelectOption(label=color.title(), value=color) for color in color_role_ids.keys()]
+        options=[nextcord.SelectOption(label=color.title(), value=color) for color in color_role_ids.keys()]
     )
     async def select_callback(self, select, interaction):
         selected_color = select.values[0]
@@ -138,12 +138,12 @@ class ColorSelectView(discord.ui.View):
                 self.user_balances[self.author.id] -= token_cost  # Deduct the token cost
                 await interaction.response.edit_message(
                     content="Your role color has been updated and 100 tokens have been deducted!", view=None)
-            except discord.Forbidden:
+            except nextcord.Forbidden:
                 await interaction.response.send_message("I do not have permission to manage roles.", ephemeral=True)
             except Exception as e:
                 await interaction.response.send_message(f"Failed to update role: {str(e)}", ephemeral=True)
 
-class ConfirmView(discord.ui.View):
+class ConfirmView(nextcord.ui.View):
     def __init__(self, author, new_role, current_roles, user_balances):
         super().__init__()
         self.author = author
@@ -151,7 +151,7 @@ class ConfirmView(discord.ui.View):
         self.current_roles = current_roles
         self.user_balances = user_balances  # Added user_balances to store user balances
 
-    @discord.ui.button(label="Yes! Change it up!", style=discord.ButtonStyle.green)
+    @nextcord.ui.button(label="Yes! Change it up!", style=nextcord.ButtonStyle.green)
     async def confirm_button(self, button, interaction):
         logging.debug("Attempting to change roles.")
         if self.new_role is None:
@@ -170,7 +170,7 @@ class ConfirmView(discord.ui.View):
             self.user_balances[self.author.id] -= token_cost  # Deduct the token cost from the user's balance
             await interaction.response.edit_message(
                 content=f"Your role has been changed successfully! {token_cost} tokens have been deducted.", view=None)
-        except discord.Forbidden:
+        except nextcord.Forbidden:
             logging.error("Bot lacks permissions to manage roles.")
             await interaction.response.send_message("I do not have the necessary permissions to change roles.",
                                                     ephemeral=True)
@@ -178,12 +178,12 @@ class ConfirmView(discord.ui.View):
             logging.error(f"Failed to change roles due to: {e}")
             await interaction.response.send_message(f"An error occurred: {e}", ephemeral=True)
 
-    @discord.ui.button(label="Naaa nvm kthx", style=discord.ButtonStyle.red)
+    @nextcord.ui.button(label="Naaa nvm kthx", style=nextcord.ButtonStyle.red)
     async def cancel_button(self, button, interaction):
         await interaction.response.edit_message(content="Role change canceled.", view=None)
 
 
-class LotteryTicketView(discord.ui.View):
+class LotteryTicketView(nextcord.ui.View):
     def __init__(self, interaction, user, server, lottery_system):
         super().__init__()
         self.interaction = interaction  # Store the interaction to modify the original response later
@@ -191,16 +191,16 @@ class LotteryTicketView(discord.ui.View):
         self.server = server
         self.lottery_system = lottery_system
 
-    @discord.ui.button(label="Purchase 1 Ticket", style=discord.ButtonStyle.primary)
-    async def purchase_single_ticket(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @nextcord.ui.button(label="Purchase 1 Ticket", style=nextcord.ButtonStyle.primary)
+    async def purchase_single_ticket(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
         await self.purchase_tickets(1, interaction)
 
-    @discord.ui.button(label="Purchase 5 Tickets", style=discord.ButtonStyle.primary)
-    async def purchase_five_tickets(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @nextcord.ui.button(label="Purchase 5 Tickets", style=nextcord.ButtonStyle.primary)
+    async def purchase_five_tickets(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
         await self.purchase_tickets(5, interaction)
 
-    @discord.ui.button(label="Purchase 10 Tickets", style=discord.ButtonStyle.primary)
-    async def purchase_ten_tickets(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @nextcord.ui.button(label="Purchase 10 Tickets", style=nextcord.ButtonStyle.primary)
+    async def purchase_ten_tickets(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
         await self.purchase_tickets(10, interaction)
 
     async def purchase_tickets(self, ticket_quantity, interaction):
@@ -293,7 +293,7 @@ async def buy_item(interaction, author, guild, item_id, lottery_pot, user_balanc
                         await author.add_roles(role)
                         user_balances[author.id] -= epic_member_role_cost
                         await interaction.response.send_message(f"Role granted successfully! {epic_member_role_cost} tokens have been deducted.", ephemeral=True)
-                    except discord.Forbidden:
+                    except nextcord.Forbidden:
                         await interaction.response.send_message("Error: I do not have permission to assign roles.", ephemeral=True)
                     except Exception as e:
                         await interaction.response.send_message(f"An error occurred while assigning the role: {str(e)}", ephemeral=True)
@@ -317,7 +317,7 @@ async def buy_item(interaction, author, guild, item_id, lottery_pot, user_balanc
                         await author.add_roles(role)
                         user_balances[author.id] -= name_change
                         await interaction.response.send_message(f"Role for name change granted successfully! {name_change} tokens have been deducted.", ephemeral=True)
-                    except discord.Forbidden:
+                    except nextcord.Forbidden:
                         await interaction.response.send_message("Error: I do not have permission to assign roles.", ephemeral=True)
                     except Exception as e:
                         await interaction.response.send_message(f"An error occurred while assigning the role: {str(e)}", ephemeral=True)
@@ -395,7 +395,7 @@ async def buy_item(interaction, author, guild, item_id, lottery_pot, user_balanc
                         await author.add_roles(role)
                         user_balances[author.id] -= server_announcement_cost
                         await interaction.response.send_message(f"Role for server announcements granted successfully! {server_announcement_cost} tokens have been deducted. Use the command `/announcement` to make a server-wide announcement whenever you want.", ephemeral=True)
-                    except discord.Forbidden:
+                    except nextcord.Forbidden:
                         await interaction.response.send_message("Error: I do not have permission to assign roles.", ephemeral=True)
                     except Exception as e:
                         await interaction.response.send_message(f"An error occurred while assigning the role: {str(e)}", ephemeral=True)
@@ -422,7 +422,7 @@ async def buy_item(interaction, author, guild, item_id, lottery_pot, user_balanc
         emoji_select_view = EmojiSelectView(interaction, author, guild, user_balances)
         await interaction.response.send_message("Select an emoji to add to your name:", view=emoji_select_view, ephemeral=True)
 
-class EmojiSelectView(discord.ui.View):
+class EmojiSelectView(nextcord.ui.View):
     def __init__(self, interaction, author, guild, user_balances):
         super().__init__()
         self.interaction = interaction
@@ -430,19 +430,19 @@ class EmojiSelectView(discord.ui.View):
         self.guild = guild
         self.user_balances = user_balances
 
-    @discord.ui.select(
+    @nextcord.ui.select(
         placeholder="Select an emoji...",
         min_values=1,
         max_values=1,
         options=[
-            discord.SelectOption(label="The Hiker 🥾", value="🥾"),
-            discord.SelectOption(label="The Adventurer ⛰️", value="⛰️"),
-            discord.SelectOption(label="Exploding with Awesome 💥", value="💥"),
-            discord.SelectOption(label="Fools Potato 🥔", value="🥔"),
-            discord.SelectOption(label="The Partier 🥳", value="🥳"),
-            discord.SelectOption(label="Love ❤️", value="❤️"),
-            discord.SelectOption(label="I'm a cat 😺", value="😺"),
-            discord.SelectOption(label="The Majestic 🦄", value="🦄")
+            nextcord.SelectOption(label="The Hiker 🥾", value="🥾"),
+            nextcord.SelectOption(label="The Adventurer ⛰️", value="⛰️"),
+            nextcord.SelectOption(label="Exploding with Awesome 💥", value="💥"),
+            nextcord.SelectOption(label="Fools Potato 🥔", value="🥔"),
+            nextcord.SelectOption(label="The Partier 🥳", value="🥳"),
+            nextcord.SelectOption(label="Love ❤️", value="❤️"),
+            nextcord.SelectOption(label="I'm a cat 😺", value="😺"),
+            nextcord.SelectOption(label="The Majestic 🦄", value="🦄")
         ]
     )
     async def select_callback(self, select, interaction):
@@ -471,13 +471,13 @@ class EmojiSelectView(discord.ui.View):
         try:
             await self.author.edit(nick=new_name)
             await interaction.response.send_message(f"Your nickname has been updated to: {new_name}", ephemeral=True)
-        except discord.Forbidden:
+        except nextcord.Forbidden:
             await interaction.response.send_message("I don't have permission to change nicknames.", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"An error occurred: {str(e)}", ephemeral=True)
 
 
-class ConfirmEmojiChangeView(discord.ui.View):
+class ConfirmEmojiChangeView(nextcord.ui.View):
     def __init__(self, interaction, author, guild, new_emoji, user_balances):
         super().__init__()
         self.interaction = interaction
@@ -486,7 +486,7 @@ class ConfirmEmojiChangeView(discord.ui.View):
         self.new_emoji = new_emoji
         self.user_balances = user_balances
 
-    @discord.ui.button(label="Yes, change it!", style=discord.ButtonStyle.green)
+    @nextcord.ui.button(label="Yes, change it!", style=nextcord.ButtonStyle.green)
     async def confirm_change(self, button, interaction):
         if self.user_balances.get(self.author.id, 0) >= emoji_cost:
             self.user_balances[self.author.id] -= emoji_cost  # Deduct tokens
@@ -494,22 +494,22 @@ class ConfirmEmojiChangeView(discord.ui.View):
                 self.new_emoji, interaction)
             try:
                 await interaction.edit_original_message(content="Emoji has been changed successfully!", view=None)
-            except discord.errors.InteractionResponded:
+            except nextcord.errors.InteractionResponded:
                 # This block is optional and normally shouldn't be necessary unless other interactions can occur.
                 print("Attempted to edit an already responded interaction.")
             self.stop()
         else:
             try:
                 await interaction.response.send_message("Insufficient tokens after confirmation.", ephemeral=True)
-            except discord.errors.InteractionResponded:
+            except nextcord.errors.InteractionResponded:
                 await interaction.followup.send("Insufficient tokens after confirmation.", ephemeral=True)
             self.stop()
 
-    @discord.ui.button(label="No, keep current!", style=discord.ButtonStyle.red)
+    @nextcord.ui.button(label="No, keep current!", style=nextcord.ButtonStyle.red)
     async def cancel_change(self, button, interaction):
         try:
             await interaction.edit_original_message(content="Emoji change canceled.", view=None)
-        except discord.errors.InteractionResponded:
+        except nextcord.errors.InteractionResponded:
             print("Attempted to edit an already responded interaction.")
         self.stop()
 
@@ -517,12 +517,12 @@ class ConfirmEmojiChangeView(discord.ui.View):
 async def show_shop_items(interaction, lottery_pot, user_balances, user_tickets, client):
     try:
         token_balance = user_balances.get(interaction.user.id, 0)
-        embed = discord.Embed(
+        embed = nextcord.Embed(
             title="🛒 Bird's Corner Store",
             description=f"Welcome, my esteemed customer :bird:! Feast your eyes upon the wares of my legendary bird emporium.\n\nCurrent token balance: {token_balance} tokens",
-            color=discord.Color.gold()
+            color=nextcord.Color.gold()
         )
-        file = discord.File('mystuff.gif', filename="mystuff.gif")
+        file = nextcord.File('mystuff.gif', filename="mystuff.gif")
         embed.set_image(url="attachment://mystuff.gif")
         view = ItemSelectView(interaction, interaction.user, interaction.guild, lottery_pot, user_balances,
                               user_tickets, client)
@@ -531,5 +531,5 @@ async def show_shop_items(interaction, lottery_pot, user_balances, user_tickets,
         logging.error(f"Error in show_shop_items: {e}")
         try:
             await interaction.response.send_message("An error occurred while loading the shop items.", ephemeral=True)
-        except discord.errors.InteractionResponded:
+        except nextcord.errors.InteractionResponded:
             logging.error("Failed to send error message due to InteractionResponded.")
