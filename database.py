@@ -9,49 +9,8 @@ PATH = os.path.abspath(os.getcwd()) + "/database.db"
 logger = logging.getLogger("custom")
 
 async def load():
-    async with aiosqlite.connect(PATH) as conn:
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_balances (
-                user_id BIGINT PRIMARY KEY,
-                balance INT
-            )
-            """
-        )
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS stock_prices (
-                user_id BIGINT PRIMARY KEY,
-                price INT
-            )
-            """
-        )
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_stocks (
-                user_id BIGINT PRIMARY KEY,
-                stocks TEXT
-            )
-            """
-        )
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_tickets (
-                user_id BIGINT PRIMARY KEY,
-                ticket_count INT
-            )
-            """
-        )
-
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS price_histories (
-                user_id BIGINT PRIMARY KEY,
-                history TEXT
-            )
-            """
-        )
-        conn.commit()
+    aiosqlite.connect(PATH)
+    
 
 async def write(sql_command: str,
                 *params
