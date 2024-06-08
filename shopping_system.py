@@ -106,7 +106,7 @@ class ColorSelectView(nextcord.ui.View):
 
         # Check user balance and deduct tokens
         token_cost = color_cost
-        user_balance = self.user_balances.get(self.author.id, 0)
+        user_balance = self.user_balances[self.author.id]["balance"]
         if user_balance < token_cost:
             await interaction.response.send_message("Insufficient tokens to purchase this color change.", ephemeral=True)
             return
@@ -135,7 +135,7 @@ class ColorSelectView(nextcord.ui.View):
             try:
                 await self.author.remove_roles(*roles_to_remove, reason="Changing color role")
                 await self.author.add_roles(new_role, reason="Adding new color role")
-                self.user_balances[self.author.id] -= token_cost  # Deduct the token cost
+                self.user_balances[self.author.id]["balance"] -= token_cost  # Deduct the token cost
                 await interaction.response.edit_message(
                     content="Your role color has been updated and 100 tokens have been deducted!", view=None)
             except nextcord.Forbidden:
@@ -160,14 +160,14 @@ class ConfirmView(nextcord.ui.View):
 
         # Check if the user has enough tokens before proceeding
         token_cost = 100  # Assuming the cost for a role change
-        if self.user_balances.get(self.author.id, 0) < token_cost:
+        if self.user_balances[self.author.id]["balance"] < token_cost:
             await interaction.response.send_message("Insufficient tokens for this role change.", ephemeral=True)
             return
 
         try:
             await self.author.remove_roles(*self.current_roles, reason="Role change requested")
             await self.author.add_roles(self.new_role, reason="Role change requested")
-            self.user_balances[self.author.id] -= token_cost  # Deduct the token cost from the user's balance
+            self.user_balances[self.author.id]["balance"] -= token_cost  # Deduct the token cost from the user's balance
             await interaction.response.edit_message(
                 content=f"Your role has been changed successfully! {token_cost} tokens have been deducted.", view=None)
         except nextcord.Forbidden:
@@ -227,18 +227,18 @@ class LotterySystem:
             return "Lottery draw in progress, please wait."
 
         total_cost = ticket_cost * ticket_quantity
-        if self.user_balances.get(user_id, 0) < total_cost:
+        if self.user_balances[user_id]["balance"] < total_cost:
             return f"Insufficient balance to buy {ticket_quantity} tickets."
 
-        self.user_balances[user_id] -= total_cost
-        self.user_tickets[user_id] = self.user_tickets.get(user_id, 0) + ticket_quantity
+        self.user_balances[user_id]["balance"] -= total_cost
+        self.user_tickets[user_id]["ticket_count"] += ticket_quantity
 
-        LotterySystem.lottery_pot += total_cost  # Use class name to reference class variable
+        LotterySystem.lottery_pot += total_cost  # Use class name to reference class variable        
+            
+        if sum([x["ticket_count"] for x in self.user_tickets.values()]) >= ticket_pot_threshold and not self.drawing_in_progress:
+            return await self.draw_winner()        
 
-        if sum(self.user_tickets.values()) >= ticket_pot_threshold and not self.drawing_in_progress:
-            return await self.draw_winner()
-
-        return f"You bought {ticket_quantity} lottery tickets! You now have {self.user_tickets[user_id]} tickets."
+        return f"You bought {ticket_quantity} lottery tickets! You now have {self.user_tickets[user_id]["ticket_count"]} tickets."
 
     async def draw_winner(self):
         self.drawing_in_progress = True
@@ -248,7 +248,7 @@ class LotterySystem:
 
         winner = random.choice(list(self.user_tickets.keys()))
         winnings = LotterySystem.lottery_pot
-        self.user_balances[winner] += winnings
+        self.user_balances[winner]["balance"] += winnings
 
         # Fetch the user object using the winner's ID
         winner_user = await self.client.fetch_user(winner)
@@ -288,10 +288,10 @@ async def buy_item(interaction, author, guild, item_id, lottery_pot, user_balanc
             if role in author.roles:
                 await interaction.response.send_message("You already have this role!", ephemeral=True)
             else:
-                if user_balances[author.id] >= epic_member_role_cost:
+                if user_balances[author.id]["balance"] >= epic_member_role_cost:
                     try:
                         await author.add_roles(role)
-                        user_balances[author.id] -= epic_member_role_cost
+                        user_balances[author.id]["balance"] -= epic_member_role_cost
                         await interaction.response.send_message(f"Role granted successfully! {epic_member_role_cost} tokens have been deducted.", ephemeral=True)
                     except nextcord.Forbidden:
                         await interaction.response.send_message("Error: I do not have permission to assign roles.", ephemeral=True)
@@ -312,10 +312,10 @@ async def buy_item(interaction, author, guild, item_id, lottery_pot, user_balanc
             if role in author.roles:
                 await interaction.response.send_message("You already have this role!", ephemeral=True)
             else:
-                if user_balances[author.id] >= name_change:
+                if user_balances[author.id]["balance"] >= name_change:
                     try:
                         await author.add_roles(role)
-                        user_balances[author.id] -= name_change
+                        user_balances[author.id]["balance"] -= name_change
                         await interaction.response.send_message(f"Role for name change granted successfully! {name_change} tokens have been deducted.", ephemeral=True)
                     except nextcord.Forbidden:
                         await interaction.response.send_message("Error: I do not have permission to assign roles.", ephemeral=True)
@@ -359,11 +359,11 @@ async def buy_item(interaction, author, guild, item_id, lottery_pot, user_balanc
 
                     # No color roles, add Rainbows directly
 
-                    if user_balances[author.id] >= rainbows_cost:
+                    if user_balances[author.id]["balance"] >= rainbows_cost:
 
                         await author.add_roles(role)
 
-                        user_balances[author.id] -= rainbows_cost
+                        user_balances[author.id]["balance"] -= rainbows_cost
 
                         await interaction.response.send_message(
 
@@ -390,10 +390,10 @@ async def buy_item(interaction, author, guild, item_id, lottery_pot, user_balanc
             if role in author.roles:
                 await interaction.response.send_message("You already have this role!", ephemeral=True)
             else:
-                if user_balances[author.id] >= server_announcement_cost:
+                if user_balances[author.id]["balance"] >= server_announcement_cost:
                     try:
                         await author.add_roles(role)
-                        user_balances[author.id] -= server_announcement_cost
+                        user_balances[author.id]["balance"] -= server_announcement_cost
                         await interaction.response.send_message(f"Role for server announcements granted successfully! {server_announcement_cost} tokens have been deducted. Use the command `/announcement` to make a server-wide announcement whenever you want.", ephemeral=True)
                     except nextcord.Forbidden:
                         await interaction.response.send_message("Error: I do not have permission to assign roles.", ephemeral=True)
@@ -409,11 +409,11 @@ async def buy_item(interaction, author, guild, item_id, lottery_pot, user_balanc
         await interaction.response.send_message("Select the number of tickets you want to purchase:", view=lottery_view, ephemeral=True)
 
     elif item_id == 7:  # Month of Nitro
-        if user_balances[author.id] >= month_of_nitro_cost:
+        if user_balances[author.id]["balance"] >= month_of_nitro_cost:
             admin_user_id = 899566604931706911  # Admin user ID
             admin_user = await client.fetch_user(admin_user_id)
             await admin_user.send(f"<@{author.id}> has purchased a Month of Nitro!")
-            user_balances[author.id] -= month_of_nitro_cost
+            user_balances[author.id]["balance"] -= month_of_nitro_cost
             await interaction.response.send_message("Thank you for purchasing a Month of Nitro! 2000 tokens have been deducted.", ephemeral=True)
         else:
             await interaction.response.send_message("Insufficient tokens to purchase a Month of Nitro.", ephemeral=True)
@@ -459,8 +459,8 @@ class EmojiSelectView(nextcord.ui.View):
                 view=confirm_view, ephemeral=True)
             return
 
-        if self.user_balances.get(self.author.id, 0) >= emoji_cost:
-            self.user_balances[self.author.id] -= emoji_cost  # Deduct tokens
+        if self.user_balances[self.author.id]["balance"] >= emoji_cost:
+            self.user_balances[self.author.id]["balance"]-= emoji_cost  # Deduct tokens
             await self.apply_emoji_change(emoji, interaction)
         else:
             await interaction.response.send_message("Insufficient tokens to add this emoji.", ephemeral=True)
@@ -488,8 +488,8 @@ class ConfirmEmojiChangeView(nextcord.ui.View):
 
     @nextcord.ui.button(label="Yes, change it!", style=nextcord.ButtonStyle.green)
     async def confirm_change(self, button, interaction):
-        if self.user_balances.get(self.author.id, 0) >= emoji_cost:
-            self.user_balances[self.author.id] -= emoji_cost  # Deduct tokens
+        if self.user_balances[self.author.id]["balance"] >= emoji_cost:
+            self.user_balances[self.author.id]["balance"] -= emoji_cost  # Deduct tokens
             await EmojiSelectView(interaction, self.author, self.guild, self.user_balances).apply_emoji_change(
                 self.new_emoji, interaction)
             try:
@@ -516,7 +516,7 @@ class ConfirmEmojiChangeView(nextcord.ui.View):
 
 async def show_shop_items(interaction, lottery_pot, user_balances, user_tickets, client):
     try:
-        token_balance = user_balances.get(interaction.user.id, 0)
+        token_balance = user_balances[interaction.user.id]["balance"]
         embed = nextcord.Embed(
             title="🛒 Bird's Corner Store",
             description=f"Welcome, my esteemed customer :bird:! Feast your eyes upon the wares of my legendary bird emporium.\n\nCurrent token balance: {token_balance} tokens",
