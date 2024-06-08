@@ -1,4 +1,5 @@
 import nextcord
+import nextcord
 import random
 import logging
 import re
