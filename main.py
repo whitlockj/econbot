@@ -1112,7 +1112,7 @@ async def claim(interaction: nextcord.Interaction):
         # Create an embed to send as a response
         embed = nextcord.Embed(
             title="🎉 You've claimed the pot! 🎉",
-            description=f"You now have {user_balances[user_id]["balance"]} tokens. 💰",
+            description=f"You now have {user_balances[user_id]['balance']} tokens. 💰",
             color=nextcord.Color.green()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)

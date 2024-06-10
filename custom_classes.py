@@ -118,7 +118,7 @@ class DatabaseTable:
         self.loop.create_task(self.__load())
         self.loop.create_task(self.__periodic_save())
 
-    def type_to_sql(v: type | None) -> t.Literal["INTEGER", "REAL", "BOOLEAN", "TEXT"]:
+    def type_to_sql(self, v: type | None) -> t.Literal["INTEGER", "REAL", "BOOLEAN", "TEXT"]:
         if v is None:
             x = "TEXT"
             return x
@@ -214,7 +214,7 @@ class DatabaseTable:
         for primary_key, data in self.dict.items():
 
             try:
-                x = self.old_dict[primary_key]
+                _x = self.old_dict[primary_key]
             except KeyError:
                 
                 for k, v in data.items():
