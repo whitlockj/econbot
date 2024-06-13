@@ -186,7 +186,20 @@ class DatabaseTable:
                 if isinstance(v, self.dict_schema[data_key]):
                     return v
                 
-                result = literal_eval(v)
+                try:
+                    result = literal_eval(v)
+                except ValueError:
+                    print(f"Failed to convert '{v}' to type '{self.dict_schema[data_key]}'")
+                    
+                    # God forgive me for this
+                    if self.dict_schema[data_key] in [set, tuple, list]:
+                        result = []
+                        elems = str(v).strip().removesuffix("]").removeprefix("[").removeprefix("(").removesuffix(")").removeprefix("{").removesuffix("}").split(",")
+                        for elem in elems:
+                            try:
+                                result.append(int(elem.strip()))
+                            except:
+                                raise Exception(f"Tried temporarily patching error, failed.")
 
                 if not isinstance(result, self.dict_schema[data_key]):
                     raise ValueError(f"Value '{v}' is not of type '{self.dict_schema[data_key]}'")
@@ -316,3 +329,13 @@ class DatabaseTable:
 
     def popitem(self):
         return self.dict.popitem()
+
+
+if __name__ == "__main__":
+    async def test():
+        loop = asyncio.get_event_loop()
+        price_histories = DatabaseTable(loop=loop, db_table="price_histories", schema=("user_id", int, {"history": list}))
+        await price_histories.loaded.wait()
+        print(price_histories[123])
+
+    asyncio.run(test())
