@@ -118,7 +118,7 @@ class DatabaseTable:
         self.loop.create_task(self.__load())
         self.loop.create_task(self.__periodic_save())
 
-    def type_to_sql(v: type | None) -> t.Literal["INTEGER", "REAL", "BOOLEAN", "TEXT"]:
+    def type_to_sql(self, v: type | None) -> t.Literal["INTEGER", "REAL", "BOOLEAN", "TEXT"]:
         if v is None:
             x = "TEXT"
             return x
@@ -186,7 +186,20 @@ class DatabaseTable:
                 if isinstance(v, self.dict_schema[data_key]):
                     return v
                 
-                result = literal_eval(v)
+                try:
+                    result = literal_eval(v)
+                except ValueError:
+                    print(f"Failed to convert '{v}' to type '{self.dict_schema[data_key]}'")
+                    
+                    # God forgive me for this
+                    if self.dict_schema[data_key] in [set, tuple, list]:
+                        result = []
+                        elems = str(v).strip().removesuffix("]").removeprefix("[").removeprefix("(").removesuffix(")").removeprefix("{").removesuffix("}").split(",")
+                        for elem in elems:
+                            try:
+                                result.append(int(elem.strip()))
+                            except:
+                                raise Exception(f"Tried temporarily patching error, failed.")
 
                 if not isinstance(result, self.dict_schema[data_key]):
                     raise ValueError(f"Value '{v}' is not of type '{self.dict_schema[data_key]}'")
@@ -214,7 +227,7 @@ class DatabaseTable:
         for primary_key, data in self.dict.items():
 
             try:
-                x = self.old_dict[primary_key]
+                _x = self.old_dict[primary_key]
             except KeyError:
                 
                 for k, v in data.items():
@@ -316,3 +329,13 @@ class DatabaseTable:
 
     def popitem(self):
         return self.dict.popitem()
+
+
+if __name__ == "__main__":
+    async def test():
+        loop = asyncio.get_event_loop()
+        price_histories = DatabaseTable(loop=loop, db_table="price_histories", schema=("user_id", int, {"history": list}))
+        await price_histories.loaded.wait()
+        print(price_histories[123])
+
+    asyncio.run(test())

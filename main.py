@@ -307,6 +307,7 @@ async def award_most_active_user():
     # Reset the message tracker for the next day
     minute_message_tracker.clear()
 
+@bot.listen()
 async def on_raw_reaction_add(payload: nextcord.RawReactionActionEvent):
     # Check if the reaction is from the bot itself
     if payload.user_id != bot.user.id:
@@ -321,11 +322,12 @@ async def on_raw_reaction_add(payload: nextcord.RawReactionActionEvent):
                 return  # If they have, don't give them a token
 
             # If they haven't, give them a token and record that they've reacted to this message
-            user_balances[payload.user_id]["balance"] = user_balances[payload.user_id]["balance"] + 1
+            user_balances[payload.user_id]["balance"] += 1
             token_gains[payload.user_id] = token_gains.get(payload.user_id, 0) + 1  # Update token gains
             user_reacted_messages.setdefault(payload.user_id, set()).add(payload.message_id)
             logging.info(f"{payload.user_id} gains 1 token from reacting to a message.")
 
+@bot.listen()
 async def on_raw_reaction_remove(payload: nextcord.RawReactionActionEvent):
     # Check if the reaction is from the bot itself
     if payload.user_id != bot.user.id:
@@ -338,7 +340,7 @@ async def on_raw_reaction_remove(payload: nextcord.RawReactionActionEvent):
             # Check if the user has already reacted to this message
             if payload.message_id in user_reacted_messages.get(payload.user_id, set()):
                 # If they have, remove a token and remove the message from their reacted messages
-                user_balances[payload.user_id]["balance"] = user_balances[payload.user_id]["balance"] - 1
+                user_balances[payload.user_id]["balance"] -= 1
                 token_gains[payload.user_id] = token_gains.get(payload.user_id, 0) - 1  # Update token gains
                 user_reacted_messages[payload.user_id].remove(payload.message_id)
                 logging.info(f"{payload.user_id} loses 1 token from unreacting to a message.")
@@ -397,19 +399,22 @@ async def on_message(message: nextcord.Message):
 
         if not bot_in_recession:
             apply_recession_punishment.stop()
+            user_balances[message.author.id]["balance"] += 1
             channel = bot.get_channel(RECESSION_CHAN)
             embed = nextcord.Embed(title="🚀💰 End of Recession 💰🚀",
                                 description="The server has exited the recession. Token gains are reinstated.",
                                 color=nextcord.Color.green())
             await channel.send(embed=embed)
             print("Recession ended due to sufficient message activity.")
+    else:
+        user_balances[message.author.id]["balance"] += 1
                 
 
 @tasks.loop(seconds=RECESSION_PUNISHMENT_FREQUENCY)
 async def apply_recession_punishment():
     global user_balances, last_token_deduction_time
     for user_id, balance in user_balances.items():
-        user_balances[user_id] = max(int(balance["balance"] - int(balance["balance"] * RECESSION_PUNISHMENT_MULTIPLIER)), 1)
+        user_balances[user_id]["balance"] = max(int(balance["balance"] - int(balance["balance"] * RECESSION_PUNISHMENT_MULTIPLIER)), 1)
     
 
 
@@ -1112,7 +1117,7 @@ async def claim(interaction: nextcord.Interaction):
         # Create an embed to send as a response
         embed = nextcord.Embed(
             title="🎉 You've claimed the pot! 🎉",
-            description=f"You now have {user_balances[user_id]["balance"]} tokens. 💰",
+            description=f"You now have {user_balances[user_id]['balance']} tokens. 💰",
             color=nextcord.Color.green()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
