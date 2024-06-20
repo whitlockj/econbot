@@ -235,7 +235,10 @@ For further assistance or if you encounter any issues, please reach out to the s
 @tasks.loop(hours=24)
 async def daily_token_gainers():
     # Fetch the top 5 users with the highest token balances
-    top_users: dict[int, int] = {k:v["balance"] for k, v in sorted(user_balances.items(), key=lambda item: item["balance"], reverse=True)}[:5]
+    top_users: dict[int, int] = {elem[0]: elem[1]["balance"] for elem in sorted(user_balances.items(), key=lambda item: item[1]["balance"], reverse=True)[:5]}
+    print("Top users:")
+    for user_id, balance in top_users.items():
+        print(f"{user_id}: {balance}")
 
     # Fetch the top 5 users who have sent the most messages since the last message
     if minute_message_tracker:  # Check if minute_message_tracker is not empty
@@ -699,7 +702,12 @@ async def stock(interaction: nextcord.Interaction):
 
 @bot.slash_command(guild_ids=[GUILD_ID], description="See the top 5 token holders")
 async def leader(interaction: nextcord.Interaction):
-    top_users: dict[int, int] = {k:v["balance"] for k, v in sorted(user_balances.items(), key=lambda item: item["balance"], reverse=True)}[:5]
+    top_users: dict[int, int] = {elem[0]: elem[1]["balance"] for elem in sorted(user_balances.items(), key=lambda item: item[1]["balance"], reverse=True)[:5]}
+    
+    print("Top users:")
+    for user_id, balance in top_users.items():
+        print(f"{user_id}: {balance}")
+
     
     # Create an embed to send as a response
     embed = nextcord.Embed(

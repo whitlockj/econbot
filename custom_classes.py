@@ -1,9 +1,11 @@
 import asyncio
 from functools import lru_cache
+import random
 import database as db
 import typing as t
 from ast import literal_eval
 import copy
+import datetime
 
 T = t.TypeVar("T")
 
@@ -189,17 +191,7 @@ class DatabaseTable:
                 try:
                     result = literal_eval(v)
                 except ValueError:
-                    print(f"Failed to convert '{v}' to type '{self.dict_schema[data_key]}'")
-                    
-                    # God forgive me for this
-                    if self.dict_schema[data_key] in [set, tuple, list]:
-                        result = []
-                        elems = str(v).strip().removesuffix("]").removeprefix("[").removeprefix("(").removesuffix(")").removeprefix("{").removesuffix("}").split(",")
-                        for elem in elems:
-                            try:
-                                result.append(int(elem.strip()))
-                            except:
-                                raise Exception(f"Tried temporarily patching error, failed.")
+                    result = eval(v)
 
                 if not isinstance(result, self.dict_schema[data_key]):
                     raise ValueError(f"Value '{v}' is not of type '{self.dict_schema[data_key]}'")
@@ -334,8 +326,18 @@ class DatabaseTable:
 if __name__ == "__main__":
     async def test():
         loop = asyncio.get_event_loop()
-        price_histories = DatabaseTable(loop=loop, db_table="price_histories", schema=("user_id", int, {"history": list}))
-        await price_histories.loaded.wait()
-        print(price_histories[123])
+        user_balances = DatabaseTable(loop=loop, db_table="user_balances", schema=("user_id", int, {"balance": int}))
+        # user_tickets = DatabaseTable(loop=loop, db_table="user_tickets", schema=("user_id", int, {"ticket_count": int}))
+        # stock_prices = DatabaseTable(loop=loop, db_table="stock_prices", schema=("user_id", int, {"price": int}))
+        # price_histories = DatabaseTable(loop=loop, db_table="price_histories", schema=("user_id", int, {"history": list}))
+        # user_stocks = DatabaseTable(loop=loop, db_table="user_stocks", schema=("user_id", int, {"stocks": dict}))
+        await user_balances.loaded.wait()
+        for i in range(1000000, 1000100):
+            user_balances[i] = {"balance":random.randint(1000, 10000)}
+        top_users = {elem[0]: elem[1]["balance"] for elem in sorted(user_balances.items(), key=lambda item: item[1]["balance"], reverse=True)[:5]}
+        
+            
+        print(top_users)
+
 
     asyncio.run(test())
